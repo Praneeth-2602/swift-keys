@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import Groq from "groq-sdk";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 
 export const runtime = "edge";
 
@@ -9,104 +11,113 @@ interface DrillRequest {
   mode: "words" | "sentences" | "code";
 }
 
-const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
-const GEMINI_API_URL =
-  "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent";
-
 type Provider = "groq" | "gemini";
 type ProviderPreference = "auto" | Provider;
+
+async function withTimeout<T>(
+  action: Promise<T>,
+  timeout = 5000
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`Timed out after ${timeout}ms`)), timeout);
+  });
+
+  try {
+    return await Promise.race([action, timeoutPromise]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 
 function buildPrompt(data: DrillRequest): string {
   const { weakKeys, slowBigrams, currentWpm, mode } = data;
 
-  const keyList = weakKeys.length > 0 ? weakKeys.join(", ") : "general keys";
-  const bigramList =
-    slowBigrams.length > 0 ? slowBigrams.join(", ") : "general bigrams";
+  const keyList = weakKeys.join(", ") || "general keys";
+  const bigramList = slowBigrams.join(", ") || "general transitions";
 
-  const modeInstructions: Record<DrillRequest["mode"], string> = {
+  const modeInstructions = {
     words:
-      "Generate a sequence of 30–40 space-separated lowercase words (no punctuation). Each word should heavily use the weak keys listed.",
+      "Return EXACTLY 35 lowercase words separated by single spaces. No punctuation.",
     sentences:
-      "Generate 3–4 natural English sentences (with punctuation) that heavily feature the weak keys and bigrams listed.",
+      "Return EXACTLY 3 natural English sentences with proper punctuation.",
     code:
-      "Generate a short realistic code snippet (15–20 lines, Python or TypeScript) that naturally uses the weak keys and bigrams listed.",
+      "Return a clean 15-line TypeScript snippet. No markdown, no explanations.",
   };
 
-  return `You are a typing coach AI. Generate a custom typing drill for a user.
+  return `
+Generate a typing practice drill.
 
-User stats:
-- Current average WPM: ${currentWpm}
-- Weakest keys (lowest accuracy): ${keyList}
-- Slowest bigrams (slowest consecutive-key transitions): ${bigramList}
+User:
+- WPM: ${currentWpm}
+- Weak keys: ${keyList}
+- Slow transitions: ${bigramList}
 
-Drill mode: ${mode}
-${modeInstructions[mode]}
+Mode: ${mode}
 
-IMPORTANT:
-- Return ONLY the drill text itself — no explanation, no preamble, no markdown fences.
-- Focus heavily on the weak keys and bigrams so the user gets targeted practice.
-- Keep it natural and readable (not gibberish).`;
+Rules:
+- ${modeInstructions[mode]}
+- Use weak keys and transitions frequently.
+- Keep output natural and readable.
+- DO NOT include explanations or formatting.
+- DO NOT include markdown or backticks.
+
+Output:
+`.trim();
 }
 
 async function generateWithGroq(
   prompt: string,
   apiKey: string
 ): Promise<string> {
-  const res = await fetch(GROQ_API_URL, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: "llama3-8b-8192",
-      messages: [{ role: "user", content: prompt }],
-      max_tokens: 400,
-      temperature: 0.7,
-    }),
-  });
+  const client = new Groq({ apiKey });
+  const completion = await withTimeout(
+    client.chat.completions.create({
+      model: "llama-3.1-8b-instant",
+      messages: [
+        {
+          role: "system",
+          content:
+            "You are a precise typing drill generator. You MUST strictly follow instructions and output clean text only.",
+        },
+        { role: "user", content: prompt },
+      ],
+      max_tokens: 300,
+      temperature: 0.4,
+      top_p: 0.9,
+    })
+  );
 
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`Groq error ${res.status}: ${err}`);
-  }
-
-  const data = await res.json();
-  return data.choices?.[0]?.message?.content?.trim() ?? "";
+  return completion.choices?.[0]?.message?.content?.trim() ?? "";
 }
 
 async function generateWithGemini(
   prompt: string,
   apiKey: string
 ): Promise<string> {
-  const res = await fetch(`${GEMINI_API_URL}?key=${apiKey}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
+  const genAI = new GoogleGenerativeAI(apiKey);
+  const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+  const result = await withTimeout(
+    model.generateContent({
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
       generationConfig: {
-        maxOutputTokens: 400,
-        temperature: 0.7,
+        maxOutputTokens: 300,
+        temperature: 0.4,
+        topP: 0.9,
       },
-    }),
-  });
-
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`Gemini error ${res.status}: ${err}`);
-  }
-
-  const data = await res.json();
-  return (
-    data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ?? ""
+    })
   );
+
+  return result.response.text().trim();
 }
 
 function sanitizeDrillText(raw: string): string {
   if (!raw) return "";
+
   return raw
-    .replace(/^```[a-zA-Z]*\n?/g, "")
-    .replace(/\n?```$/g, "")
+    .replace(/```[\s\S]*?```/g, "")
+    .replace(/[`*_>#-]/g, "")
+    .replace(/\n{2,}/g, "\n")
     .trim();
 }
 
@@ -126,8 +137,8 @@ function resolveProviderConfig() {
     preferred === "groq"
       ? ["groq", "gemini"]
       : preferred === "gemini"
-      ? ["gemini", "groq"]
-      : ["groq", "gemini"];
+        ? ["gemini", "groq"]
+        : ["groq", "gemini"];
 
   return { groqKey, geminiKey, preferred, available, order };
 }
