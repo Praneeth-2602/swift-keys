@@ -338,12 +338,6 @@ function PracticeInner() {
               Sign in to sync your stats, streak, and leaderboard progress to MongoDB.
             </div>
           )}
-          {drillProviderStatus && (
-            <div className="rounded-lg border border-surface-border bg-surface-secondary px-4 py-2 text-xs font-mono text-slate-400">
-              AI providers: {drillProviderStatus.providersAvailable.groq ? "Groq" : "Groq (missing key)"} · {drillProviderStatus.providersAvailable.gemini ? "Gemini" : "Gemini (missing key)"}
-              <span className="ml-2 text-slate-500">pref: {drillProviderStatus.preferredProvider}</span>
-            </div>
-          )}
           {/* Daily challenge banner */}
           {mode === "daily" && (
             <div className="flex items-center gap-2 px-3 py-1.5 bg-brand/10 border border-brand/20 rounded-lg text-xs font-mono text-brand">
