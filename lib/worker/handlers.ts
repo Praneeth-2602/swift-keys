@@ -8,15 +8,6 @@
 
 import type { Job, JobType } from "@/lib/queue";
 import { getCollections } from "@/lib/server/db";
-import Groq from "groq-sdk";
-import { GoogleGenerativeAI } from "@google/generative-ai";
-
-const DEFAULT_GEMINI_MODELS = [
-  "gemma-3-27b-it",
-  "gemma-3-12b-it",
-  "gemini-2.5-flash",
-  "gemini-2.0-flash",
-] as const;
 
 // ── Handler registry ───────────────────────────────────────────────────────
 
@@ -51,7 +42,7 @@ async function handleGenerateDrillCache(raw: unknown): Promise<void> {
   const p = raw as GenerateDrillCachePayload;
 
   const groqKey   = process.env.GROQ_API_KEY   ?? "";
-  const geminiKey = process.env.GEMINI_API_KEY ?? "";
+  const geminiKey = process.env.GEMINI_API_KEY  ?? "";
 
   if (!groqKey && !geminiKey) return; // nothing to do without an LLM key
 
@@ -144,41 +135,34 @@ IMPORTANT:
 }
 
 async function callGroq(prompt: string, apiKey: string): Promise<string> {
-  const client = new Groq({ apiKey });
-  const completion = await client.chat.completions.create({
-    model: "llama-3.1-8b-instant",
-    messages: [{ role: "user", content: prompt }],
-    max_tokens: 300,
-    temperature: 0.7,
+  const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+    method:  "POST",
+    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+    body:    JSON.stringify({
+      model:      "llama3-8b-8192",
+      messages:   [{ role: "user", content: prompt }],
+      max_tokens: 300,
+      temperature: 0.7,
+    }),
   });
-  return completion.choices?.[0]?.message?.content?.trim() ?? "";
+  if (!res.ok) throw new Error(`Groq ${res.status}`);
+  const data = await res.json();
+  return data.choices?.[0]?.message?.content?.trim() ?? "";
 }
 
 async function callGemini(prompt: string, apiKey: string): Promise<string> {
-  const genAI = new GoogleGenerativeAI(apiKey);
-  const configuredModels = (process.env.GEMINI_MODELS ?? "")
-    .split(",")
-    .map((m) => m.trim())
-    .filter(Boolean);
-  const models = configuredModels.length > 0 ? configuredModels : [...DEFAULT_GEMINI_MODELS];
-
-  let lastError: unknown = null;
-  for (const modelName of models) {
-    try {
-      const model = genAI.getGenerativeModel({ model: modelName });
-      const result = await model.generateContent({
-        contents: [{ role: "user", parts: [{ text: prompt }] }],
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
+    {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({
+        contents:         [{ parts: [{ text: prompt }] }],
         generationConfig: { maxOutputTokens: 300, temperature: 0.7 },
-      });
-      const text = result.response.text().trim();
-      if (text) return text;
-    } catch (err) {
-      lastError = err;
-      console.warn(`[worker] Gemini model ${modelName} failed, trying fallback...`);
+      }),
     }
-  }
-
-  throw new Error(
-    `Gemini generation failed for models: ${models.join(", ")}${lastError ? ` | ${String(lastError)}` : ""}`
   );
+  if (!res.ok) throw new Error(`Gemini ${res.status}`);
+  const data = await res.json();
+  return data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ?? "";
 }

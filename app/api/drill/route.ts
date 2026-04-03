@@ -14,13 +14,6 @@ interface DrillRequest {
 type Provider = "groq" | "gemini";
 type ProviderPreference = "auto" | Provider;
 
-const DEFAULT_GEMINI_MODELS = [
-  "gemma-3-27b-it",
-  "gemma-3-12b-it",
-  "gemini-2.5-flash",
-  "gemini-2.0-flash",
-] as const;
-
 async function withTimeout<T>(
   action: Promise<T>,
   timeout = 5000
@@ -103,38 +96,19 @@ async function generateWithGemini(
   apiKey: string
 ): Promise<string> {
   const genAI = new GoogleGenerativeAI(apiKey);
-  const configuredModels = (process.env.GEMINI_MODELS ?? "")
-    .split(",")
-    .map((m) => m.trim())
-    .filter(Boolean);
-  const models = configuredModels.length > 0 ? configuredModels : [...DEFAULT_GEMINI_MODELS];
-
-  let lastError: unknown = null;
-  for (const modelName of models) {
-    try {
-      const model = genAI.getGenerativeModel({ model: modelName });
-      const result = await withTimeout(
-        model.generateContent({
-          contents: [{ role: "user", parts: [{ text: prompt }] }],
-          generationConfig: {
-            maxOutputTokens: 300,
-            temperature: 0.4,
-            topP: 0.9,
-          },
-        })
-      );
-
-      const text = result.response.text().trim();
-      if (text) return text;
-    } catch (err) {
-      lastError = err;
-      console.warn(`[api/drill] Gemini model ${modelName} failed, trying fallback...`);
-    }
-  }
-
-  throw new Error(
-    `Gemini generation failed for models: ${models.join(", ")}${lastError ? ` | ${String(lastError)}` : ""}`
+  const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+  const result = await withTimeout(
+    model.generateContent({
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+      generationConfig: {
+        maxOutputTokens: 300,
+        temperature: 0.4,
+        topP: 0.9,
+      },
+    })
   );
+
+  return result.response.text().trim();
 }
 
 function sanitizeDrillText(raw: string): string {
