@@ -2,13 +2,5 @@
   "framework": "nextjs",
   "buildCommand": "next build",
   "devCommand": "next dev",
-  "installCommand": "npm install",
-  "env": {
-    "NEXTAUTH_SECRET": "@nextauth_secret",
-    "NEXTAUTH_URL": "@nextauth_url",
-    "MONGODB_URI": "@mongodb_uri",
-    "MONGODB_DB": "@mongodb_db",
-    "GROQ_API_KEY": "@groq_api_key",
-    "GEMINI_API_KEY": "@gemini_api_key"
-  }
+  "installCommand": "npm install"
 }
