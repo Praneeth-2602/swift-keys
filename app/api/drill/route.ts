@@ -135,20 +135,24 @@ function resolveProviderConfig() {
 function validateDrillRequest(body: unknown): DrillRequest | null {
   if (!body || typeof body !== "object") return null;
   const candidate = body as Partial<DrillRequest>;
-  const validMode =
-    candidate.mode === "words" ||
-    candidate.mode === "sentences" ||
-    candidate.mode === "code";
-  if (!validMode) return null;
+  const modeCandidate = candidate.mode;
+  if (
+    modeCandidate !== "words" &&
+    modeCandidate !== "sentences" &&
+    modeCandidate !== "code"
+  ) {
+    return null;
+  }
   if (!Array.isArray(candidate.weakKeys) || !Array.isArray(candidate.slowBigrams)) {
     return null;
   }
+  const mode: DrillRequest["mode"] = modeCandidate;
 
   return {
     weakKeys: candidate.weakKeys.map((k) => String(k).slice(0, 3)).slice(0, 10),
     slowBigrams: candidate.slowBigrams.map((b) => String(b).slice(0, 4)).slice(0, 10),
     currentWpm: Number.isFinite(Number(candidate.currentWpm)) ? Number(candidate.currentWpm) : 0,
-    mode: candidate.mode,
+    mode,
   };
 }
 
